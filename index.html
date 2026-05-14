@@ -187,28 +187,40 @@
 
         <div class="example">
             <h3>📋 Example Format:</h3>
-            <pre>No	Date	Work Time	Location
-1	05.08.2025	06:30-14:00	0092 Extra Grilstad
-2	06.08.2025	13:00-20:00	0092 Extra Grilstad
-3	07.08.2025	08:00-15:00	0092 Extra Grilstad</pre>
+            <pre>Vakter for Håpnes, Stine
+
+Dato	Arbeidstid	Sted
+01.06.2026	09:00_05:00	0092 Extra Grilstad
+02.06.2026	08:00_04:00	0092 Extra Grilstad
+03.06.2026	03:00_11:15	0092 Extra Grilstad</pre>
         </div>
 
         <div id="message"></div>
     </div>
 
     <script>
+        document.getElementById('scheduleData').addEventListener('input', function() {
+            const data = this.value.trim();
+            const nameInput = document.getElementById('personName');
+            const match = data.match(/Vakter for\s+(.+)/i);
+            if (match && !nameInput.value.trim()) {
+                const nameParts = match[1].trim().replace(/,\s*/, ', ').split(',').map(s => s.trim());
+                nameInput.value = nameParts.length === 2 ? `${nameParts[1]} ${nameParts[0]}` : nameParts[0];
+            }
+        });
+
         document.getElementById('scheduleForm').addEventListener('submit', function(e) {
             e.preventDefault();
-            
+
             const personName = document.getElementById('personName').value.trim();
             const scheduleData = document.getElementById('scheduleData').value.trim();
             const messageDiv = document.getElementById('message');
-            
+
             if (!personName || !scheduleData) {
                 showMessage('Please fill in both fields.', 'error');
                 return;
             }
-            
+
             try {
                 const icsContent = generateICS(personName, scheduleData);
                 downloadICS(icsContent, `${personName}_work_schedule.ics`);
@@ -221,60 +233,57 @@
         function generateICS(personName, scheduleData) {
             const lines = scheduleData.split('\n').filter(line => line.trim());
             const events = [];
-            
-            // Skip header line and process data lines
-            for (let i = 1; i < lines.length; i++) {
+
+            for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 if (!line) continue;
-                
-                // Parse the line - split by tabs or multiple spaces
-                const parts = line.split(/\t+|\s{2,}/).filter(part => part.trim());
-                
-                if (parts.length < 4) {
-                    // Try splitting by single tab or comma
-                    const altParts = line.split(/\t|,/).map(p => p.trim()).filter(p => p);
-                    if (altParts.length >= 4) {
-                        parts.splice(0, parts.length, ...altParts);
-                    } else {
-                        continue; // Skip malformed lines
-                    }
+
+                // Skip non-data lines (headers, "Vakter for...", "This is a system generated...")
+                if (/^(No|Dato|Vakter|This is)/i.test(line)) continue;
+
+                const parts = line.split(/\t+/).map(p => p.trim()).filter(p => p);
+
+                let dateStr, timeStr, location;
+
+                if (parts.length >= 4 && /^\d+$/.test(parts[0])) {
+                    [, dateStr, timeStr, location] = parts;
+                } else if (parts.length >= 3) {
+                    [dateStr, timeStr, location] = parts;
+                } else {
+                    continue;
                 }
-                
-                const [no, dateStr, timeStr, location] = parts;
-                
+
                 if (!dateStr || !timeStr) continue;
-                
-                // Parse date (DD.MM.YYYY format)
+
                 const dateParts = dateStr.split('.');
                 if (dateParts.length !== 3) continue;
-                
+
                 const day = parseInt(dateParts[0]);
                 const month = parseInt(dateParts[1]);
                 const year = parseInt(dateParts[2]);
-                
+
                 if (isNaN(day) || isNaN(month) || isNaN(year)) continue;
-                
-                // Parse time (HH:MM-HH:MM format)
-                const timeParts = timeStr.split('-');
+
+                // Support both - and _ as time separators
+                const timeParts = timeStr.split(/[-_]/);
                 if (timeParts.length !== 2) continue;
-                
+
                 const [startTime, endTime] = timeParts;
                 const [startHour, startMin] = startTime.split(':').map(n => parseInt(n));
                 const [endHour, endMin] = endTime.split(':').map(n => parseInt(n));
-                
+
                 if (isNaN(startHour) || isNaN(startMin) || isNaN(endHour) || isNaN(endMin)) continue;
-                
-                // Create start and end datetime objects
+
                 const startDate = new Date(year, month - 1, day, startHour, startMin);
                 let endDate = new Date(year, month - 1, day, endHour, endMin);
-                
-                // If end time is before start time, it's next day
+
                 if (endDate <= startDate) {
                     endDate.setDate(endDate.getDate() + 1);
                 }
-                
+
+                const displayTime = `${startTime}-${endTime}`;
                 events.push({
-                    title: `${personName} vakt ${timeStr}`,
+                    title: `${personName} vakt ${displayTime}`,
                     location: location || '',
                     startDate: startDate,
                     endDate: endDate
