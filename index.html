@@ -153,6 +153,57 @@
             border-left: 4px solid #3c3;
         }
 
+        .preview {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-left: 4px solid #667eea;
+        }
+
+        .preview h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .preview p {
+            color: #666;
+            margin-bottom: 15px;
+        }
+
+        .preview table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .preview th,
+        .preview td {
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .preview td:first-child {
+            white-space: nowrap;
+        }
+
+        .preview small {
+            display: block;
+            color: #666;
+        }
+
+        .preview select {
+            width: 100%;
+            max-width: 16em;
+            font-size: 1em;
+            padding: 4px;
+        }
+
+        .preview tr.needs-choice {
+            background: #fff3cd;
+        }
+
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
@@ -160,6 +211,19 @@
 
             .header h1 {
                 font-size: 2em;
+            }
+
+            .preview {
+                padding: 12px;
+            }
+
+            .preview th,
+            .preview td {
+                padding: 6px 4px;
+            }
+
+            .preview .year {
+                display: none;
             }
         }
     </style>
@@ -180,6 +244,17 @@
             <div class="form-group">
                 <label for="scheduleData">Paste your duty list here:</label>
                 <textarea id="scheduleData" name="scheduleData" placeholder="Paste your schedule data here..." required></textarea>
+            </div>
+
+            <div id="preview" class="preview" hidden>
+                <h3>🕒 Check the times</h3>
+                <p id="previewNote"></p>
+                <table>
+                    <thead>
+                        <tr><th>Date</th><th>Shift</th></tr>
+                    </thead>
+                    <tbody id="previewRows"></tbody>
+                </table>
             </div>
 
             <button type="submit" class="btn">Generate ICS Calendar File</button>
@@ -209,6 +284,10 @@ Dato	Arbeidstid	Sted
             }
         });
 
+        document.getElementById('scheduleData').addEventListener('input', renderPreview);
+        // A reload or the back button brings the pasted text back without an input event.
+        window.addEventListener('pageshow', renderPreview);
+
         document.getElementById('scheduleForm').addEventListener('submit', function(e) {
             e.preventDefault();
 
@@ -222,7 +301,12 @@ Dato	Arbeidstid	Sted
             }
 
             try {
-                const icsContent = generateICS(personName, scheduleData);
+                renderPreview();
+                const shifts = resolveSchedule(scheduleData);
+                if (shifts.some(shift => !shift.reading)) {
+                    throw new Error('Choose the time for the yellow rows in the list above.');
+                }
+                const icsContent = generateICS(personName, shifts);
                 downloadICS(icsContent, `${personName}_work_schedule.ics`);
                 showMessage('✅ ICS file generated successfully!', 'success');
             } catch (error) {
@@ -230,65 +314,172 @@ Dato	Arbeidstid	Sted
             }
         });
 
-        function generateICS(personName, scheduleData) {
-            const lines = scheduleData.split('\n').filter(line => line.trim());
-            const events = [];
+        // The staff app exports its times on a 12-hour clock without AM/PM, so
+        // "03:00_11:15" can mean 03:00-11:15 or 15:00-23:15. A row is preset
+        // only when exactly one reading lies inside these working hours; any
+        // other row has to be chosen in the list under the text box.
+        const EARLIEST_START = 5 * 60;
+        const LATEST_END = 24 * 60;
+        const LONGEST_SHIFT = 13 * 60;
+        const DAY = 24 * 60;
 
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
+        // A date, then the two times. The cells arrive tab-separated or on a
+        // line each, depending on where the list was copied from.
+        const ROW_PATTERN = /\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b\s+((\d{1,2})[:.](\d{2})\s*[-_\u2013\u2014]\s*(\d{1,2})[:.](\d{2}))(?!\d)/g;
+        // Lines that are never a workplace: a row number, a header, the footer.
+        const NOT_A_LOCATION = /^(\d+$|No\b|Dato\b|Vakter\b|This is\b)/i;
 
-                // Skip non-data lines (headers, "Vakter for...", "This is a system generated...")
-                if (/^(No|Dato|Vakter|This is)/i.test(line)) continue;
+        const choices = new Map();  // the reading picked by hand, per row
 
-                const parts = line.split(/\t+/).map(p => p.trim()).filter(p => p);
+        function parseSchedule(text) {
+            const matches = [...text.matchAll(ROW_PATTERN)];
+            const rows = [];
+            const seen = new Set();
 
-                let dateStr, timeStr, location;
+            matches.forEach((match, index) => {
+                const [day, month, year, startHour, startMin, endHour, endMin] =
+                    [1, 2, 3, 5, 6, 7, 8].map(group => parseInt(match[group]));
 
-                if (parts.length >= 4 && /^\d+$/.test(parts[0])) {
-                    [, dateStr, timeStr, location] = parts;
-                } else if (parts.length >= 3) {
-                    [dateStr, timeStr, location] = parts;
-                } else {
-                    continue;
-                }
+                const date = new Date(Date.UTC(year, month - 1, day));
+                if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return;
+                if (startHour > 23 || endHour > 23 || startMin > 59 || endMin > 59) return;
 
-                if (!dateStr || !timeStr) continue;
+                // The workplace is the next cell: the rest of the line, or the
+                // next line when every cell was pasted on a line of its own.
+                const next = index + 1 < matches.length ? matches[index + 1].index : text.length;
+                const tail = text.slice(match.index + match[0].length, next).split(/\r?\n/);
+                const sameLine = tail[0].split('\t').map(cell => cell.trim()).find(cell => cell);
+                const location = sameLine
+                    || tail.slice(1).map(line => line.trim()).find(line => line && !NOT_A_LOCATION.test(line))
+                    || '';
 
-                const dateParts = dateStr.split('.');
-                if (dateParts.length !== 3) continue;
+                const key = `${day}.${month}.${year} ${match[4]} ${location}`;
+                if (seen.has(key)) return;  // the same list pasted twice
+                seen.add(key);
 
-                const day = parseInt(dateParts[0]);
-                const month = parseInt(dateParts[1]);
-                const year = parseInt(dateParts[2]);
-
-                if (isNaN(day) || isNaN(month) || isNaN(year)) continue;
-
-                // Support both - and _ as time separators
-                const timeParts = timeStr.split(/[-_]/);
-                if (timeParts.length !== 2) continue;
-
-                const [startTime, endTime] = timeParts;
-                const [startHour, startMin] = startTime.split(':').map(n => parseInt(n));
-                const [endHour, endMin] = endTime.split(':').map(n => parseInt(n));
-
-                if (isNaN(startHour) || isNaN(startMin) || isNaN(endHour) || isNaN(endMin)) continue;
-
-                const startDate = new Date(year, month - 1, day, startHour, startMin);
-                let endDate = new Date(year, month - 1, day, endHour, endMin);
-
-                if (endDate <= startDate) {
-                    endDate.setDate(endDate.getDate() + 1);
-                }
-
-                const displayTime = `${startTime}-${endTime}`;
-                events.push({
-                    title: `${personName} vakt ${displayTime}`,
-                    location: location || '',
-                    startDate: startDate,
-                    endDate: endDate
+                rows.push({
+                    year, month, day,
+                    raw: match[4],
+                    start: [startHour, startMin],
+                    end: [endHour, endMin],
+                    location
                 });
+            });
+
+            return rows;
+        }
+
+        // A list with any time after 12:59, or one at 00:xx, is on the 24-hour
+        // clock and is used as written. Without one, AM/PM is what is missing.
+        function usesTwelveHourClock(rows) {
+            return rows.every(row => [row.start[0], row.end[0]].every(hour => hour >= 1 && hour <= 12));
+        }
+
+        // The shifts a row can stand for, in minutes after 00:00 on its date.
+        function shiftReadings(row, twelveHour) {
+            const hours = hour => !twelveHour ? [hour] : hour === 12 ? [0, 12] : [hour, hour + 12];
+            const readings = [];
+
+            for (const startHour of hours(row.start[0])) {
+                for (const endHour of hours(row.end[0])) {
+                    const start = startHour * 60 + row.start[1];
+                    let end = endHour * 60 + row.end[1];
+                    if (end <= start) end += DAY;  // the shift ends after midnight
+                    if (!twelveHour || end - start <= LONGEST_SHIFT) readings.push({ start, end });
+                }
             }
+
+            return readings.sort((a, b) => a.start - b.start || a.end - b.end);
+        }
+
+        function presetReading(readings) {
+            if (readings.length === 1) return readings[0];
+            const inside = readings.filter(r => r.start >= EARLIEST_START && r.end <= LATEST_END);
+            return inside.length === 1 ? inside[0] : null;
+        }
+
+        function clock(minutes) {
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(Math.floor(minutes / 60) % 24)}:${pad(minutes % 60)}`;
+        }
+
+        function span(reading) {
+            return `${clock(reading.start)}-${clock(reading.end)}`;
+        }
+
+        function rowKey(row) {
+            return `${row.day}.${row.month}.${row.year} ${row.raw}`;
+        }
+
+        // Every row with the reading that will be written: the one picked by
+        // hand, else the preset one, else none yet.
+        function resolveSchedule(text) {
+            const rows = parseSchedule(text);
+            const twelveHour = usesTwelveHourClock(rows);
+
+            return rows.map(row => {
+                const readings = shiftReadings(row, twelveHour);
+                const picked = choices.get(rowKey(row));
+                const reading = readings.find(r => span(r) === picked) || presetReading(readings);
+                return { row, readings, reading, twelveHour };
+            });
+        }
+
+        function renderPreview() {
+            const shifts = resolveSchedule(document.getElementById('scheduleData').value);
+            const pad = n => String(n).padStart(2, '0');
+
+            document.getElementById('preview').hidden = shifts.length === 0;
+            document.getElementById('previewNote').textContent = shifts.length && shifts[0].twelveHour
+                ? 'The times in this list have no AM/PM, so 03:00 can mean 03:00 or 15:00. Each row is set to the shift that fits working hours 05:00-24:00. Change a row that is wrong; a yellow row needs your choice.'
+                : 'This list is on the 24-hour clock, so the times are used as written.';
+
+            document.getElementById('previewRows').replaceChildren(...shifts.map(({ row, readings, reading }) => {
+                const tr = document.createElement('tr');
+                const weekday = new Date(Date.UTC(row.year, row.month - 1, row.day))
+                    .toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
+
+                // The date, with the times as the list has them underneath.
+                const listed = tr.insertCell();
+                listed.textContent = `${weekday} ${pad(row.day)}.${pad(row.month)}`;
+                const year = listed.appendChild(document.createElement('span'));
+                year.className = 'year';  // left out on a phone, where the row is narrow
+                year.textContent = `.${row.year}`;
+                listed.appendChild(document.createElement('small')).textContent = row.raw;
+
+                const cell = tr.insertCell();
+                if (readings.length === 1) {
+                    cell.textContent = span(reading);
+                    return tr;
+                }
+
+                const select = document.createElement('select');
+                select.required = true;
+                if (!reading) {
+                    select.add(new Option('Choose…', ''));
+                    tr.className = 'needs-choice';
+                }
+                readings.forEach(r => {
+                    const label = span(r) + (r.end > DAY ? ' (next day)' : '');
+                    select.add(new Option(label, span(r), false, r === reading));
+                });
+                select.addEventListener('change', () => {
+                    choices.set(rowKey(row), select.value);
+                    tr.className = select.value ? '' : 'needs-choice';
+                });
+                cell.appendChild(select);
+                return tr;
+            }));
+        }
+
+        function generateICS(personName, shifts) {
+            const events = shifts.map(({ row, reading }) => ({
+                title: `${personName} vakt ${span(reading)}`,
+                location: row.location,
+                // Minutes past 24:00 roll over into the next day.
+                startDate: new Date(row.year, row.month - 1, row.day, 0, reading.start),
+                endDate: new Date(row.year, row.month - 1, row.day, 0, reading.end)
+            }));
             
             if (events.length === 0) {
                 throw new Error('No valid schedule entries found. Please check your data format.');

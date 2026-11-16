@@ -10,6 +10,7 @@ Convert your work schedule into a calendar file (`.ics`) you can import into Goo
 - Paste your duty list in table format  
 - Specify the person in charge (“Vaktansvarlig”)  
 - Generate `.ics` calendar file in browser  
+- Reads 12-hour times exported without AM/PM (`03:00_11:15` is 15:00-23:15) and shows every shift for checking before download  
 - Supports overnight shifts (end time past midnight)  
 
 ---
@@ -19,8 +20,9 @@ Convert your work schedule into a calendar file (`.ics`) you can import into Goo
 1. Visit the site: https://hapnes-dev.github.io/work.schedule/  
 2. Enter “Person Name (Vaktansvarlig)”  
 3. Paste your schedule data  
-4. Click **Generate ICS Calendar File**  
-5. Download and import into your calendar app  
+4. Check the times in the list that appears; a yellow row needs your choice  
+5. Click **Generate ICS Calendar File**  
+6. Download and import into your calendar app  
 
 ---
 
