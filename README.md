@@ -1,6 +1,6 @@
 # 📅 Work Schedule to ICS Converter
 
-[![Website](https://img.shields.io/website?url=https%3A%2F%2Fworkschedule.site&label=Live%20Demo&logo=google-chrome&logoColor=white)](https://workschedule.site) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Website](https://img.shields.io/website?url=https%3A%2F%2Fhapnes-dev.github.io%2Fwork.schedule%2F&label=Live%20Demo&logo=google-chrome&logoColor=white)](https://hapnes-dev.github.io/work.schedule/) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 Convert your work schedule into a calendar file (`.ics`) you can import into Google Calendar, Outlook or Apple Calendar.  
 
@@ -16,7 +16,7 @@ Convert your work schedule into a calendar file (`.ics`) you can import into Goo
 
 ## 🚀 How to Use
 
-1. Visit the site: https://workschedule.site/  
+1. Visit the site: https://hapnes-dev.github.io/work.schedule/  
 2. Enter “Person Name (Vaktansvarlig)”  
 3. Paste your schedule data  
 4. Click **Generate ICS Calendar File**  
